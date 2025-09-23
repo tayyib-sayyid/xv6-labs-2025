@@ -194,6 +194,10 @@ UPROGS=\
 	$U/_zombie\
 	$U/_logstress\
 	$U/_forphan\
+        $U/_sleep\
+        $U/_sixfive\
+        $U/_find\
+        $U/_memdump\
 	$U/_dorphan\
 
 
