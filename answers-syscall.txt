@@ -1,0 +1,6 @@
+usertrap
+0xf
+User
+80001cf8:  00002683   lw a3,0(zero) (register is a3)
+changed syscall() to num = *(int*)0;, which dereferences virtual address 0x0. Address 0 is not mapped in the kernel’s address space hence a page fault occurs when this instruction is run.
+init
