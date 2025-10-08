@@ -41,4 +41,5 @@ entry("dup");
 entry("getpid");
 entry("sbrk");
 entry("pause");
+entry("interpose");
 entry("uptime");

@@ -146,6 +146,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->sysmask = 0;
+  p->allowed_path[0] = 0;  // Task 3; initialize empty
+
   return p;
 }
 
@@ -284,6 +287,11 @@ kfork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  // Inherit sandbox state (Task 2/3):
+  np->sysmask = p->sysmask;
+  memmove(np->allowed_path, p->allowed_path, sizeof(p->allowed_path));  // for Task 3; harmless now
+
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
