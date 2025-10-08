@@ -193,6 +193,7 @@ UPROGS=\
 	$U/_wc\
 	$U/_zombie\
 	$U/_logstress\
+        $U/_attack\
 	$U/_forphan\
         $U/_sandbox\
 	$U/_dorphan\

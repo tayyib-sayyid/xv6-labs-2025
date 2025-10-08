@@ -123,6 +123,8 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+  p->deny_mask = 0;
+  p->allow_path[0] = 0;
   p->state = USED;
 
   // Allocate a trapframe page.
@@ -145,9 +147,6 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
-  p->sysmask = 0;
-  p->allowed_path[0] = 0;  // Task 3; initialize empty
 
   return p;
 }
@@ -172,6 +171,9 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  p->deny_mask = 0;
+  p->allow_path[0] = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -281,17 +283,16 @@ kfork(void)
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
+  
+  // inherit sandbox settings from parent
+  np->deny_mask = p->deny_mask;
+  safestrcpy(np->allow_path, p->allow_path, sizeof(np->allow_path));
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
-
-  // Inherit sandbox state (Task 2/3):
-  np->sysmask = p->sysmask;
-  memmove(np->allowed_path, p->allowed_path, sizeof(p->allowed_path));  // for Task 3; harmless now
-
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -420,12 +421,6 @@ kwait(uint64 addr)
 }
 
 // Per-CPU process scheduler.
-// Each CPU calls scheduler() after setting itself up.
-// Scheduler never returns.  It loops, doing:
-//  - choose a process to run.
-//  - swtch to start running that process.
-//  - eventually that process transfers control
-//    via swtch back to the scheduler.
 void
 scheduler(void)
 {
@@ -446,15 +441,12 @@ scheduler(void)
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
+        // Switch to chosen process.
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
-        // It should have changed its p->state before coming back.
         c->proc = 0;
         found = 1;
       }
@@ -470,10 +462,7 @@ scheduler(void)
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
-// kernel thread, not this CPU. It should
-// be proc->intena and proc->noff, but that would
-// break in the few places where a lock is held but
-// there's no process.
+// kernel thread, not this CPU.
 void
 sched(void)
 {
@@ -592,8 +581,6 @@ wakeup(void *chan)
 }
 
 // Kill the process with the given pid.
-// The victim won't exit until it tries to return
-// to user space (see usertrap() in trap.c).
 int
 kkill(int pid)
 {
@@ -636,7 +623,6 @@ killed(struct proc *p)
 
 // Copy to either a user address, or kernel address,
 // depending on usr_dst.
-// Returns 0 on success, -1 on error.
 int
 either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
@@ -651,7 +637,6 @@ either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 
 // Copy from either a user address, or kernel address,
 // depending on usr_src.
-// Returns 0 on success, -1 on error.
 int
 either_copyin(void *dst, int user_src, uint64 src, uint64 len)
 {
@@ -666,7 +651,6 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
 
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.
-// No lock to avoid wedging a stuck machine further.
 void
 procdump(void)
 {

@@ -1,4 +1,6 @@
 // Saved registers for kernel context switches.
+
+#include "param.h"
 struct context {
   uint64 ra;
   uint64 sp;
@@ -103,8 +105,8 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
-  char name[16];               // Process name (debugging)
-  uint sysmask;                 // sandbox mask (bit k blocks syscall k)
-  char allowed_path[MAXPATH];   // (for Task 3; harmless here)
+  char name[16];               // Process name 
 
+  char allow_path[MAXPATH];    
+  uint64 deny_mask;           
 };

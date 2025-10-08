@@ -106,17 +106,17 @@ sys_uptime(void)
   return xticks;
 }
 
-int
+uint64
 sys_interpose(void)
 {
-  int mask;
-  uint64 upath;           // path is ignored in Task 2
   struct proc *p = myproc();
+  int mask;
+  argint(0, &mask);                
 
-  // NOTE: argint/argaddr return void in this lab; they validate and may panic.
-  argint(0, &mask);
-  argaddr(1, &upath);
+  if (argstr(1, p->allow_path, sizeof(p->allow_path)) < 0) {
+    p->allow_path[0] = 0;
+  }
 
-  p->sysmask = (uint)mask;   // store per-process
+  p->deny_mask = (uint64)(uint32)mask;
   return 0;
 }
