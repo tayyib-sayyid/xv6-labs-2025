@@ -20,6 +20,7 @@
 // qemu puts UART registers here in physical memory.
 #define UART0 0x10000000L
 #define UART0_IRQ 10
+#define PGSIZE 4096
 
 // virtio mmio interface
 #define VIRTIO0 0x10001000
@@ -65,7 +66,16 @@
 #ifdef LAB_PGTBL
 #define USYSCALL (TRAPFRAME - PGSIZE)
 
+#ifndef USYSCALL_STRUCT_DEFINED
+#define USYSCALL_STRUCT_DEFINED
 struct usyscall {
   int pid;  // Process ID
 };
-#endif
+#endif  // USYSCALL_STRUCT_DEFINED
+
+#endif  // LAB_PGTBL
+
+// ADDED BY SAFEGUARD
+#define SUPERPAGE_SIZE (2 * 1024 * 1024)  
+#define SUPERPAGE_NPAGES 512  
+#define N_SUPERPAGES 8

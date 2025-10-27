@@ -398,3 +398,6 @@ typedef uint64 *pagetable_t; // 512 PTEs
 // Sv39, to avoid having to sign-extend virtual addresses
 // that have the high bit set.
 #define MAXVA (1L << (9 + 9 + 9 + 12 - 1))
+
+#define pa2kva(pa) ((void *)((uint64)(pa) + KERNBASE)) // ADDED BY SAFEGUARD
+#define kva2pa(va) ((uint64)(va) - KERNBASE) // ADDED BY SAFEGUARD

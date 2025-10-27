@@ -8,8 +8,16 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#include "memlayout.h"
 
-void freerange(void *pa_start, void *pa_end);
+// ADDED BY SAFEGUARD
+static void *super_free_list[N_SUPERPAGES];
+static int super_free_cnt = 0;
+
+
+// ADDED BY SAFEGUARD, slight name change to avoid conflict
+void freerange(void *vstart, void *vend);
+// void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
@@ -30,13 +38,50 @@ kinit()
   freerange(end, (void*)PHYSTOP);
 }
 
+// ADDED BY SAFEGUARD
 void
-freerange(void *pa_start, void *pa_end)
+freerange(void *vstart, void *vend)
 {
-  char *p;
-  p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  char *p = (char*)PGROUNDUP((uint64)vstart);
+  for (; (uint64)p + PGSIZE <= (uint64)vend; ) {
+    if (super_free_cnt < N_SUPERPAGES &&
+        ((uint64)p & (SUPERPAGE_SIZE - 1)) == 0 &&
+        (uint64)p + SUPERPAGE_SIZE <= (uint64)vend) {
+      super_free_list[super_free_cnt++] = p;
+      p = (char*)((uint64)p + SUPERPAGE_SIZE);
+      continue;
+    }
     kfree(p);
+    p += PGSIZE;
+  }
+}
+
+// void
+// freerange(void *pa_start, void *pa_end)
+// {
+//   char *p;
+//   p = (char*)PGROUNDUP((uint64)pa_start);
+//   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+//     kfree(p);
+// }
+
+// ADDED BY SAFEGUARD
+void *
+superalloc(void)
+{
+  if (super_free_cnt == 0)
+    return 0;
+  return super_free_list[--super_free_cnt];
+}
+
+// ADDED BY SAFEGUARD
+void
+superfree(void *pa)
+{
+  if (super_free_cnt >= N_SUPERPAGES)
+    panic("superfree: overflow");
+
+  super_free_list[super_free_cnt++] = pa;
 }
 
 // Free the page of physical memory pointed at by pa,
