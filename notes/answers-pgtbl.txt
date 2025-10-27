@@ -1,2 +1,118 @@
 problemSet3 - Task 1 answers
 
+- Below are the first 10 and last 10 lines printed by print_pgtbl, with explanations.
+
+Raw output (from my run):
+print_pgtbl starting
+va 0x0                pte 0x21FC885B pa 0x87F22000 perm 0x5B
+va 0x1000             pte 0x21FC7C5B pa 0x87F1F000 perm 0x5B
+va 0x2000             pte 0x21FC7817 pa 0x87F1E000 perm 0x17
+va 0x3000             pte 0x21FC7407 pa 0x87F1D000 perm 0x7
+va 0x4000             pte 0x21FC70D7 pa 0x87F1C000 perm 0xD7
+va 0x5000             pte 0x0        pa 0x0        perm 0x0
+va 0x6000             pte 0x0        pa 0x0        perm 0x0
+va 0x7000             pte 0x0        pa 0x0        perm 0x0
+va 0x8000             pte 0x0        pa 0x0        perm 0x0
+va 0x9000             pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFF6000       pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFF7000       pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFF8000       pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFF9000       pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFFA000       pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFFB000       pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFFC000       pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFFD000       pte 0x0        pa 0x0        perm 0x0
+va 0x3FFFFFE000       pte 0x21FD08C7 pa 0x87F42000 perm 0xC7
+va 0x3FFFFFF000       pte 0x2000184B pa 0x80006000 perm 0x4B
+print_pgtbl: OK
+
+Permission bits (RISC-V PTE) used below:
+- V=0x001, R=0x002, W=0x004, X=0x008, U=0x010, G=0x020, A=0x040, D=0x080
+
+First 10 pages — explanations
+
+1) VA 0x00000000  perm 0x5B = V|R|X|U|A
+   Region: User text (code) near start of the process image.
+   Why: X present ⇒ executable; U ⇒ user-accessible; no W ⇒ read/execute, not writable, fits text.
+
+2) VA 0x00001000  perm 0x5B = V|R|X|U|A
+   Region: User text / possibly adjacent code page or RX rodata.
+   Why: Same RXU pattern as above.
+
+3) VA 0x00002000  perm 0x17 = V|R|W|U
+   Region: User data/BSS (read–write, no execute).
+   Why: W present, no X; U ⇒ user-accessible.
+
+4) VA 0x00003000  perm 0x07 = V|R|W
+   Region: Kernel-only mapping (no U) at a low VA slot.
+   Why: Missing U means user cannot access; having RW suggests it’s mapped but only supervisor can touch it.
+         It may be an internal/test-specific mapping used by xv6/pgtbltest; user code should not depend on it.
+
+5) VA 0x00004000  perm 0xD7 = V|R|W|U|A|D
+   Region: User read–write page that has been accessed and dirtied (typical for heap/data/stack after writes).
+   Why: A|D set indicates recent accesses/writes; no X (not executable).
+
+6) VA 0x00005000  perm 0x00 = —
+   Region: Unmapped gap (no PTE).
+
+7) VA 0x00006000  perm 0x00 = —
+   Region: Unmapped gap.
+
+8) VA 0x00007000  perm 0x00 = —
+   Region: Unmapped gap.
+
+9) VA 0x00008000  perm 0x00 = —
+   Region: Unmapped gap.
+
+10) VA 0x00009000 perm 0x00 = —
+    Region: Unmapped gap.
+
+Last 10 pages — explanations
+
+1)  VA 0x3FFFFF6000 perm 0x00 = —
+    Region: Unmapped high-VA gap below per-process kernel interface pages.
+
+2)  VA 0x3FFFFF7000 perm 0x00 = —
+    Region: Unmapped.
+
+3)  VA 0x3FFFFF8000 perm 0x00 = —
+    Region: Unmapped.
+
+4)  VA 0x3FFFFF9000 perm 0x00 = —
+    Region: Unmapped.
+
+5)  VA 0x3FFFFFA000 perm 0x00 = —
+    Region: Unmapped.
+
+6)  VA 0x3FFFFFB000 perm 0x00 = —
+    Region: Unmapped.
+
+7)  VA 0x3FFFFFC000 perm 0x00 = —
+    Region: Unmapped.
+
+8)  VA 0x3FFFFFD000 perm 0x00 = —
+    Region: Unmapped. (In stock xv6 this slot is close to where a USYSCALL/guard/trapframe might live depending on the lab;
+                      in this run it’s unmapped for user.)
+
+9)  VA 0x3FFFFFE000 perm 0xC7 = V|R|W|A|D
+    Region: Per-process trapframe page (kernel uses it during traps).
+    Why: W plus A|D (modified by kernel). U is absent ⇒ user cannot read it directly (correct).
+
+10) VA 0x3FFFFFF000 perm 0x4B = V|R|X|A
+    Region: Trampoline page (return-to-user code).
+    Why: R|X with no W fits executable trampoline. U is absent here in my run (still OK since trampoline is entered
+         in supervisor context to switch back to user; not directly user-writable).
+
+Summary / sanity:
+- Low VA pages show expected text (RXU) then data/BSS (RWU). One kernel-only RW mapping appears at 0x3000 (no U),
+  which is fine as it’s inaccessible to user code.
+- High VA region shows unmapped holes, then the trapframe (RW, kernel-only) and the trampoline (RX, kernel-only).
+
+Why ugetpid_test crashed (expected before Task 2):
+After print_pgtbl, the test ran `ugetpid_test` and we saw:
+  usertrap(): unexpected scause 0xd pid=3
+              sepc=0x79e stval=0x3fffffd000
+- scause 0xD indicates a user load page fault.
+- stval 0x3fffffd000 is an address in the high-VA band that the test tried to read as its “USYSCALL” page.
+- In Task 2 we must create and map a read-only USYSCALL page at the designated VA; currently it’s unmapped,
+  so reads fault, as observed. Implementing Task 2 will fix this.
