@@ -2,33 +2,64 @@
 #include "kernel/stat.h"
 #include "kernel/fs.h"
 #include "kernel/fcntl.h"
-#include "kernel/param.h"  
+#include "kernel/param.h"
 #include "user/user.h"
 
-#define PATH_BUF 512
+// -------- Globals --------
+static int has_exec;
+static char *execv_base[MAXARG];
+static int execv_basec;
 
-static int   g_has_exec = 0;
-static char *g_exec_argv_base[MAXARG];      
-static int   g_exec_argc_base = 0;          
+// 0 = literal strcmp (default), 1 = regex (^ . * $ only)
+static int g_use_regex = 0;
+
+// -------- K&P mini-regex (xv6 grep.c) --------
+// Make these static to avoid any symbol noise.
+static int matchhere(char*, char*);
+static int matchstar(int, char*, char*);
+
+static int
+match(char *re, char *text)
+{
+  if(re[0] == '^')
+    return matchhere(re+1, text);
+  do{
+    if(matchhere(re, text))
+      return 1;
+  } while(*text++ != '\0');
+  return 0;
+}
+
+static int
+matchhere(char *re, char *text)
+{
+  if(re[0] == '\0') return 1;
+  if(re[1] == '*')  return matchstar(re[0], re+2, text);
+  if(re[0] == '$' && re[1] == '\0') return *text == '\0';
+  if(*text!='\0' && (re[0]=='.' || re[0]==*text))
+    return matchhere(re+1, text+1);
+  return 0;
+}
+
+static int
+matchstar(int c, char *re, char *text)
+{
+  do{
+    if(matchhere(re, text)) return 1;
+  } while(*text!='\0' && (*text++==c || c=='.'));
+  return 0;
+}
+// ---------------------------------------------
 
 static void
-spawn_exec_for_match(const char *filepath)
+run_exec_on(const char *filepath)
 {
-  if (!g_has_exec) return;
-
   char *argv[MAXARG];
-  int   argc = 0;
-
-  // copy base args
-  for (int i = 0; i < g_exec_argc_base && argc < MAXARG - 1; i++) {
-    argv[argc++] = g_exec_argv_base[i];
-  }
-
-  // append matched path
-  if (argc < MAXARG - 1) {
-    argv[argc++] = (char *)filepath;
-  }
-  argv[argc] = 0;
+  int ac = 0;
+  for (int i = 0; i < execv_basec && ac < MAXARG - 1; i++)
+    argv[ac++] = execv_base[i];
+  if (ac < MAXARG - 1) argv[ac++] = (char *)filepath;
+  argv[ac] = 0;
 
   int pid = fork();
   if (pid < 0) {
@@ -43,133 +74,135 @@ spawn_exec_for_match(const char *filepath)
   wait(0);
 }
 
-static int
-is_dot_or_dotdot(const char *name)
-{
-  return (name[0] == '.' &&
-         (name[1] == 0 || (name[1] == '.' && name[2] == 0)));
-}
-
 static void
-print_match_or_exec(const char *fullpath)
+find(const char *path, const char *target)
 {
-  if (g_has_exec) {
-    spawn_exec_for_match(fullpath);
-  } else {
-    printf("%s\n", fullpath);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) {
+    fprintf(2, "find: cannot open %s\n", path);
+    return;
   }
-}
 
-static void
-walk(const char *root, const char *target_name)
-{
-  int fd;
   struct stat st;
-
-  if ((fd = open(root, O_RDONLY)) < 0) {
-    fprintf(2, "find: cannot open %s\n", root);
-    return;
-  }
   if (fstat(fd, &st) < 0) {
-    fprintf(2, "find: cannot stat %s\n", root);
+    fprintf(2, "find: cannot stat %s\n", path);
     close(fd);
     return;
   }
 
-  // if root itself is a file, test its basename
   if (st.type == T_FILE) {
-    // extract last component of root
-    const char *base = root;
-    for (const char *p = root; *p; p++) {
+    // basename(path)
+    const char *base = path;
+    for (const char *p = path; *p; p++)
       if (*p == '/') base = p + 1;
-    }
-    if (strcmp(base, target_name) == 0) {
-      print_match_or_exec(root);
-    }
-    close(fd);
-    return;
-  }
 
-  if (st.type == T_DIR) {
-    char pathbuf[PATH_BUF];
-    struct dirent de;
+    int is_match = 0;
+    if (g_use_regex)
+      is_match = match((char *)target, (char *)base);
+    else
+      is_match = (strcmp((char *)base, (char *)target) == 0);
 
-    int n = 0;
-    for (n = 0; root[n] && n < PATH_BUF - 1; n++) {
-      pathbuf[n] = root[n];
+    if (is_match) {
+      if (has_exec) run_exec_on(path);
+      else printf("%s\n", path);
     }
-    if (n >= PATH_BUF - 1) {
-      fprintf(2, "find: path too long: %s\n", root);
+  } else if (st.type == T_DIR) {
+    char buf[512];
+    int n = strlen((char *)path);
+    if (n + 1 + DIRSIZ + 1 > sizeof(buf)) {
+      fprintf(2, "find: path too long: %s\n", path);
       close(fd);
       return;
     }
-    if (n == 0 || pathbuf[n-1] != '/') {
-      pathbuf[n++] = '/';
-    }
 
+    struct dirent de;
     while (read(fd, &de, sizeof(de)) == sizeof(de)) {
       if (de.inum == 0) continue;
-      if (is_dot_or_dotdot(de.name)) continue;
 
-      char *p = pathbuf + n;
-      int i = 0;
-      for (i = 0; i < DIRSIZ && de.name[i]; i++) {
-        *p++ = de.name[i];
-        if (p - pathbuf >= PATH_BUF - 1) break;
-      }
-      *p = 0;
+      char name[DIRSIZ + 1];
+      memmove(name, de.name, DIRSIZ);
+      name[DIRSIZ] = 0;
 
-      int cfd = open(pathbuf, O_RDONLY);
-      if (cfd < 0) {
+      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
         continue;
-      }
-      struct stat cst;
-      if (fstat(cfd, &cst) < 0) {
-        close(cfd);
-        continue;
-      }
 
-      if (cst.type == T_DIR) {
-        close(cfd);
-        walk(pathbuf, target_name);
-      } else {
-        if (strcmp(de.name, target_name) == 0) {
-          print_match_or_exec(pathbuf);
-        }
-        close(cfd);
-      }
+      // build child path
+      strcpy(buf, (char *)path);
+      buf[n] = '/';
+      buf[n + 1] = '\0';
+      strcpy(buf + n + 1, name);
 
+      find(buf, target);
     }
   }
 
   close(fd);
 }
 
-static void
-usage(void)
+// I walk a lonely road........
+int
+main(int argc, char *argv[])
 {
-  fprintf(2, "usage: find <startDir> <name> [-exec <cmd> [args...]]\n");
-  exit(1);
-}
-
-int main(int argc, char *argv[])
-{
-  if (argc < 3) usage();
-
-  if (argc >= 4 && strcmp(argv[3], "-exec") == 0) {
-    g_has_exec = 1;
-
-    if (argc < 5) {
-      fprintf(2, "find: -exec requires a command\n");
-      exit(1);
-    }
-
-    for (int i = 4; i < argc && g_exec_argc_base < MAXARG - 1; i++) {
-      g_exec_argv_base[g_exec_argc_base++] = argv[i];
-    }
-    g_exec_argv_base[g_exec_argc_base] = 0;
+  if (argc < 2) {
+    fprintf(2, "usage: find <start-path> <name|pattern> [-E | -F] [-exec <cmd> [args...]]\n");
+    exit(1);
   }
 
-  walk(argv[1], argv[2]);
+  has_exec = 0;
+  execv_basec = 0;
+  g_use_regex = 0;
+
+  const char *start  = argv[1];
+  const char *target = 0;
+
+  for (int i = 2; i < argc; i++) {
+
+    if (strcmp(argv[i], "-E") == 0) {
+      g_use_regex = 1;
+      if (i + 1 < argc && argv[i+1][0] != '-') {
+        target = argv[i+1];
+        i++;            // consume pattern token after -E
+      }
+      continue;
+    }
+
+    if (strcmp(argv[i], "-F") == 0) {
+      g_use_regex = 0;
+      if (i + 1 < argc && argv[i+1][0] != '-') {
+        target = argv[i+1];
+        i++;            // consume literal token after -F
+      }
+      continue;
+    }
+
+    if (strcmp(argv[i], "-exec") == 0) {
+      has_exec = 1;
+      if (i + 1 >= argc) {
+        fprintf(2, "find: -exec requires a command\n");
+        exit(1);
+      }
+      for (int j = i + 1; j < argc && execv_basec < MAXARG - 1; j++)
+        execv_base[execv_basec++] = argv[j];
+      execv_base[execv_basec] = 0;
+      // done parsing; -exec eats the rest
+      break;
+    }
+
+    // Non-flag token: set target if not yet set
+    if (!target) {
+      target = argv[i];
+    } else {
+      // Extra non-flag before -exec -> keep behavior simple
+      fprintf(2, "usage: find <start-path> <name|pattern> [-E | -F] [-exec <cmd> [args...]]\n");
+      exit(1);
+    }
+  }
+
+  if (!target) {
+    fprintf(2, "usage: find <start-path> <name|pattern> [-E | -F] [-exec <cmd> [args...]]\n");
+    exit(1);
+  }
+
+  find(start, target);
   exit(0);
 }

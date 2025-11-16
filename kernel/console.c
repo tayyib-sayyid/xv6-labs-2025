@@ -159,6 +159,16 @@ consoleintr(int c)
       consputc(BACKSPACE);
     }
     break;
+  // Autocomplete stuff
+  case '\t': 
+    if(cons.e - cons.r < INPUT_BUF_SIZE){
+      // store the tab for consoleread()
+      cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\t';
+      // readers can see it now
+      cons.w = cons.e;
+      wakeup(&cons.r);
+    }
+    break;
   default:
     if(c != 0 && cons.e-cons.r < INPUT_BUF_SIZE){
       c = (c == '\r') ? '\n' : c;
