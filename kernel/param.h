@@ -30,4 +30,14 @@
 #define USERSTACK    1     // user stack pages
 #endif
 
+// ============================================================
+// MLFQ (Multi-Level Feedback Queue) Scheduler Parameters
+// ============================================================
+#define NQUEUE              4    // Number of priority queues (0 = highest)
+#define MLFQ_QUANTUM_Q0     1    // Time quantum for queue 0 (ticks)
+#define MLFQ_QUANTUM_Q1     2    // Time quantum for queue 1 (ticks)
+#define MLFQ_QUANTUM_Q2     4    // Time quantum for queue 2 (ticks)
+#define MLFQ_QUANTUM_Q3     8    // Time quantum for queue 3 (ticks)
+#define MLFQ_BOOST_INTERVAL 100  // Ticks between priority boosts (anti-starvation)
+
 

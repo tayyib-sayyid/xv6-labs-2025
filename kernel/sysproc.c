@@ -105,3 +105,17 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// Fill a procinfo array with information about all processes.
+// Returns the number of valid entries written.
+uint64
+sys_getprocinfo(void)
+{
+  uint64 addr;  // user pointer to struct procinfo array
+  int max;      // max number of entries in the array
+
+  argaddr(0, &addr);
+  argint(1, &max);
+
+  return getprocinfo(addr, max);
+}

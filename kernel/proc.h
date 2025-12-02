@@ -81,6 +81,20 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+// Process information structure for getprocinfo syscall.
+// This structure is copied to user space and contains
+// information useful for debugging and MLFQ scheduler analysis.
+struct procinfo {
+  int pid;                     // Process ID
+  int state;                   // Process state (enum procstate)
+  char name[16];               // Process name
+  int priority;                // Priority level (placeholder for MLFQ)
+  int queue_level;             // Current MLFQ queue level (placeholder)
+  uint ticks_used;             // Total CPU ticks used by this process
+  uint ticks_at_level;         // Ticks used at current queue level
+  uint64 sz;                   // Memory size in bytes
+};
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -104,4 +118,9 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // MLFQ scheduler fields (Week 1 scaffolding - will be used in Week 2)
+  int queue_level;             // Current queue level (0 = highest priority)
+  uint ticks_at_level;         // Ticks used at current queue level
+  uint total_ticks;            // Total CPU ticks consumed by this process
 };

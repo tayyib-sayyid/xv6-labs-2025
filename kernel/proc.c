@@ -15,6 +15,28 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
+// ============================================================
+// MLFQ Scheduler Data Structures (Week 1 Scaffolding)
+// ============================================================
+// Time quantum for each priority level (in ticks)
+// Processes at lower-numbered queues have higher priority
+int mlfq_quantum[NQUEUE] = {
+  MLFQ_QUANTUM_Q0,  // Queue 0: highest priority, shortest quantum
+  MLFQ_QUANTUM_Q1,  // Queue 1
+  MLFQ_QUANTUM_Q2,  // Queue 2
+  MLFQ_QUANTUM_Q3   // Queue 3: lowest priority, longest quantum
+};
+
+// Last time a priority boost was performed (for anti-starvation)
+uint mlfq_last_boost = 0;
+
+// TODO [MLFQ Week 2]: Add queue management functions:
+//   - mlfq_enqueue(struct proc *p, int level): Add process to queue
+//   - mlfq_dequeue(int level): Remove and return first process from queue
+//   - mlfq_boost_all(): Move all processes to queue 0
+//   - mlfq_demote(struct proc *p): Move process to lower priority queue
+// ============================================================
+
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
@@ -146,6 +168,11 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // Initialize MLFQ scheduler fields (Week 1 scaffolding)
+  p->queue_level = 0;      // Start at highest priority queue
+  p->ticks_at_level = 0;   // No ticks used yet at this level
+  p->total_ticks = 0;      // No total ticks consumed yet
+
   return p;
 }
 
@@ -169,6 +196,10 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  // Reset MLFQ fields
+  p->queue_level = 0;
+  p->ticks_at_level = 0;
+  p->total_ticks = 0;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -418,6 +449,12 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+//
+// TODO [MLFQ Week 2]: Replace round-robin with MLFQ scheduling:
+//   1. Check if priority boost is needed (every MLFQ_BOOST_INTERVAL ticks)
+//   2. Iterate through queues from highest priority (0) to lowest (NQUEUE-1)
+//   3. Within each queue, run processes in round-robin order
+//   4. After process yields/preempts, update ticks and check for demotion
 void
 scheduler(void)
 {
@@ -434,7 +471,15 @@ scheduler(void)
     intr_on();
     intr_off();
 
+    // TODO [MLFQ Week 2]: Add priority boost check here
+    // if (ticks - last_boost >= MLFQ_BOOST_INTERVAL) {
+    //     boost_all_to_queue_0();
+    //     last_boost = ticks;
+    // }
+
     int found = 0;
+    // TODO [MLFQ Week 2]: Replace this loop with MLFQ queue iteration
+    // Currently: simple round-robin over proc[] array
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
@@ -449,6 +494,13 @@ scheduler(void)
         // It should have changed its p->state before coming back.
         c->proc = 0;
         found = 1;
+
+        // TODO [MLFQ Week 2]: Update tick counts and check demotion here
+        // p->ticks_at_level++;
+        // p->total_ticks++;
+        // if (p->ticks_at_level >= quantum[p->queue_level]) {
+        //     demote_process(p);
+        // }
       }
       release(&p->lock);
     }
@@ -487,12 +539,16 @@ sched(void)
 }
 
 // Give up the CPU for one scheduling round.
+// TODO [MLFQ Week 2]: Consider whether yield() should reset ticks_at_level
+//   - If called due to timer interrupt (preemption): increment ticks, maybe demote
+//   - If called voluntarily (before I/O): reset ticks_at_level to reward I/O-bound behavior
 void
 yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  // TODO [MLFQ Week 2]: Update p->ticks_at_level and p->total_ticks here
   sched();
   release(&p->lock);
 }
@@ -536,6 +592,9 @@ forkret(void)
 
 // Sleep on channel chan, releasing condition lock lk.
 // Re-acquires lk when awakened.
+// TODO [MLFQ Week 2]: Reset p->ticks_at_level here to reward I/O-bound behavior.
+//   When a process voluntarily sleeps (e.g., waiting for I/O), it demonstrates
+//   I/O-bound characteristics and should maintain its current priority level.
 void
 sleep(void *chan, struct spinlock *lk)
 {
@@ -554,6 +613,9 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+
+  // TODO [MLFQ Week 2]: Reset ticks_at_level for I/O-bound behavior
+  // p->ticks_at_level = 0;
 
   sched();
 
@@ -684,4 +746,45 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// Fill a user-space array with information about all non-UNUSED processes.
+// addr: user pointer to array of struct procinfo
+// max: maximum number of entries to fill
+// Returns the number of entries filled, or -1 on error.
+int
+getprocinfo(uint64 addr, int max)
+{
+  struct proc *p;
+  struct procinfo info;
+  int count = 0;
+  struct proc *curproc = myproc();
+
+  for(p = proc; p < &proc[NPROC] && count < max; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+      // Fill in the procinfo structure
+      info.pid = p->pid;
+      info.state = p->state;
+      safestrcpy(info.name, p->name, sizeof(info.name));
+      info.priority = p->queue_level;  // For MLFQ, priority == queue level
+      info.queue_level = p->queue_level;
+      info.ticks_used = p->total_ticks;
+      info.ticks_at_level = p->ticks_at_level;
+      info.sz = p->sz;
+
+      release(&p->lock);
+
+      // Copy to user space
+      if(copyout(curproc->pagetable, addr + count * sizeof(info),
+                 (char *)&info, sizeof(info)) < 0) {
+        return -1;
+      }
+      count++;
+    } else {
+      release(&p->lock);
+    }
+  }
+
+  return count;
 }

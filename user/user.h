@@ -2,6 +2,26 @@
 
 struct stat;
 
+// Process information structure (mirrors kernel's struct procinfo)
+struct procinfo {
+  int pid;                     // Process ID
+  int state;                   // Process state
+  char name[16];               // Process name
+  int priority;                // Priority level (for MLFQ)
+  int queue_level;             // Current MLFQ queue level
+  unsigned int ticks_used;     // Total CPU ticks used
+  unsigned int ticks_at_level; // Ticks used at current queue level
+  unsigned long sz;            // Memory size in bytes
+};
+
+// Process state constants (match kernel enum procstate)
+#define PROC_UNUSED   0
+#define PROC_USED     1
+#define PROC_SLEEPING 2
+#define PROC_RUNNABLE 3
+#define PROC_RUNNING  4
+#define PROC_ZOMBIE   5
+
 // system calls
 int fork(void);
 int exit(int) __attribute__((noreturn));
@@ -24,6 +44,7 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+int getprocinfo(struct procinfo*, int);
 
 // ulib.c
 int stat(const char*, struct stat*);
