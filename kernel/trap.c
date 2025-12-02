@@ -85,6 +85,14 @@ usertrap(void)
     // MLFQ: Track timer ticks for quantum enforcement
     p->ticks_at_level++;
     p->total_ticks++;
+    
+    // MLFQ Week 3: Periodic priority boost for starvation prevention
+    mlfq_ticks++;
+    if(mlfq_ticks >= MLFQ_BOOST_INTERVAL) {
+      mlfq_boost_all();
+      mlfq_ticks = 0;
+    }
+    
     yield();
   }
 

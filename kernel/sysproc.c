@@ -119,3 +119,15 @@ sys_getprocinfo(void)
 
   return getprocinfo(addr, max);
 }
+
+// Boost a process or all processes to the highest priority queue.
+// pid > 0: boost specific process
+// pid == -1: boost all processes
+// Returns 0 on success, -1 on failure.
+uint64
+sys_boostproc(void)
+{
+  int pid;
+  argint(0, &pid);
+  return mlfq_boost_proc(pid);
+}

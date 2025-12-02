@@ -199,6 +199,7 @@ UPROGS=\
 	$U/_cpuheavy\
 	$U/_iosim\
 	$U/_mlfqtest\
+	$U/_boostdemo\
 
 
 

@@ -27,8 +27,9 @@ int mlfq_quantum[NQUEUE] = {
   MLFQ_QUANTUM_Q3   // Queue 3: lowest priority, longest quantum
 };
 
-// Last time a priority boost was performed (for anti-starvation)
-uint mlfq_last_boost = 0;
+// Global tick counter for MLFQ boost timing (Week 3)
+// Incremented on every timer interrupt; used to trigger periodic priority boosts
+uint mlfq_ticks = 0;
 
 // Find the first RUNNABLE process at the given queue level.
 // Returns 0 if no runnable process found at this level.
@@ -57,6 +58,57 @@ mlfq_demote(struct proc *p)
     p->queue_level++;
   }
   p->ticks_at_level = 0;
+}
+
+// ============================================================
+// MLFQ Priority Boost (Week 3 - Starvation Prevention)
+// ============================================================
+// Move all boostable processes to the highest priority queue (Q0).
+// This prevents starvation of CPU-bound processes stuck in low queues.
+// Called periodically when mlfq_ticks reaches MLFQ_BOOST_INTERVAL.
+void
+mlfq_boost_all(void)
+{
+  struct proc *p;
+  
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    // Boost RUNNABLE, RUNNING, and SLEEPING processes
+    // Skip UNUSED and ZOMBIE (they don't need scheduling)
+    if(p->state == RUNNABLE || p->state == RUNNING || p->state == SLEEPING) {
+      p->queue_level = 0;       // Move to highest priority queue
+      p->ticks_at_level = 0;    // Reset quantum usage
+    }
+    release(&p->lock);
+  }
+}
+
+// Boost a single process by PID, or all processes if pid == -1.
+// Returns 0 on success, -1 if process not found.
+int
+mlfq_boost_proc(int pid)
+{
+  struct proc *p;
+  
+  if(pid == -1) {
+    // Boost all processes
+    mlfq_boost_all();
+    return 0;
+  }
+  
+  // Boost specific process
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->pid == pid && p->state != UNUSED && p->state != ZOMBIE) {
+      p->queue_level = 0;
+      p->ticks_at_level = 0;
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  
+  return -1;  // Process not found
 }
 // ============================================================
 
@@ -494,8 +546,8 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    // Priority boost check (Week 3 - placeholder for now)
-    // TODO [MLFQ Week 3]: Implement priority boost here
+    // Note: Priority boost is handled in usertrap() on timer interrupts
+    // to ensure consistent timing regardless of scheduler loop speed.
 
     int found = 0;
     
