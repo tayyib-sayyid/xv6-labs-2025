@@ -1,10 +1,5 @@
 # Week 2 Implementation Report: MLFQ Scheduler
-
-**Project:** Multi-Level Feedback Queue (MLFQ) Scheduler for xv6-RISC-V  
-**Date:** Week 2  
-**Branch:** `project`
-
----
+testing
 
 ## 1. Overview
 
@@ -301,4 +296,4 @@ $ kill <pid>        # Stop background process
 
 ---
 
-**Status:** Week 2 Complete ✅
+**Status:** Week 2 Complete 
