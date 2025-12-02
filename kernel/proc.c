@@ -16,7 +16,7 @@ int nextpid = 1;
 struct spinlock pid_lock;
 
 // ============================================================
-// MLFQ Scheduler Data Structures (Week 1 Scaffolding)
+// MLFQ Scheduler Data Structures and Functions (Week 2)
 // ============================================================
 // Time quantum for each priority level (in ticks)
 // Processes at lower-numbered queues have higher priority
@@ -30,11 +30,34 @@ int mlfq_quantum[NQUEUE] = {
 // Last time a priority boost was performed (for anti-starvation)
 uint mlfq_last_boost = 0;
 
-// TODO [MLFQ Week 2]: Add queue management functions:
-//   - mlfq_enqueue(struct proc *p, int level): Add process to queue
-//   - mlfq_dequeue(int level): Remove and return first process from queue
-//   - mlfq_boost_all(): Move all processes to queue 0
-//   - mlfq_demote(struct proc *p): Move process to lower priority queue
+// Find the first RUNNABLE process at the given queue level.
+// Returns 0 if no runnable process found at this level.
+// Caller must NOT hold any process locks.
+static struct proc*
+mlfq_find_runnable(int level)
+{
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state == RUNNABLE && p->queue_level == level) {
+      // Found one - return with lock held
+      return p;
+    }
+    release(&p->lock);
+  }
+  return 0;
+}
+
+// Demote a process to the next lower priority queue.
+// Caller must hold p->lock.
+static void
+mlfq_demote(struct proc *p)
+{
+  if(p->queue_level < NQUEUE - 1) {
+    p->queue_level++;
+  }
+  p->ticks_at_level = 0;
+}
 // ============================================================
 
 extern void forkret(void);
@@ -450,16 +473,16 @@ kwait(uint64 addr)
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
 //
-// TODO [MLFQ Week 2]: Replace round-robin with MLFQ scheduling:
-//   1. Check if priority boost is needed (every MLFQ_BOOST_INTERVAL ticks)
-//   2. Iterate through queues from highest priority (0) to lowest (NQUEUE-1)
-//   3. Within each queue, run processes in round-robin order
-//   4. After process yields/preempts, update ticks and check for demotion
+// MLFQ Scheduling (Week 2):
+//   - Scan queues from highest priority (0) to lowest (NQUEUE-1)
+//   - Select the first RUNNABLE process found
+//   - After process returns, check if demotion is needed
 void
 scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int level;
 
   c->proc = 0;
   for(;;){
@@ -471,21 +494,17 @@ scheduler(void)
     intr_on();
     intr_off();
 
-    // TODO [MLFQ Week 2]: Add priority boost check here
-    // if (ticks - last_boost >= MLFQ_BOOST_INTERVAL) {
-    //     boost_all_to_queue_0();
-    //     last_boost = ticks;
-    // }
+    // Priority boost check (Week 3 - placeholder for now)
+    // TODO [MLFQ Week 3]: Implement priority boost here
 
     int found = 0;
-    // TODO [MLFQ Week 2]: Replace this loop with MLFQ queue iteration
-    // Currently: simple round-robin over proc[] array
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
+    
+    // MLFQ: Scan queues from highest priority (0) to lowest (NQUEUE-1)
+    for(level = 0; level < NQUEUE; level++) {
+      p = mlfq_find_runnable(level);
+      if(p != 0) {
+        // Found a runnable process at this level (lock already held)
+        // Switch to chosen process.
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
@@ -495,15 +514,19 @@ scheduler(void)
         c->proc = 0;
         found = 1;
 
-        // TODO [MLFQ Week 2]: Update tick counts and check demotion here
-        // p->ticks_at_level++;
-        // p->total_ticks++;
-        // if (p->ticks_at_level >= quantum[p->queue_level]) {
-        //     demote_process(p);
-        // }
+        // MLFQ: Check if process used its full quantum and needs demotion
+        // ticks_at_level is incremented in usertrap() on timer interrupts
+        if(p->state == RUNNABLE && 
+           p->ticks_at_level >= mlfq_quantum[p->queue_level]) {
+          // Process used full quantum without sleeping - demote it
+          mlfq_demote(p);
+        }
+
+        release(&p->lock);
+        break;  // Start over from highest priority queue
       }
-      release(&p->lock);
     }
+    
     if(found == 0) {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
@@ -539,16 +562,15 @@ sched(void)
 }
 
 // Give up the CPU for one scheduling round.
-// TODO [MLFQ Week 2]: Consider whether yield() should reset ticks_at_level
-//   - If called due to timer interrupt (preemption): increment ticks, maybe demote
-//   - If called voluntarily (before I/O): reset ticks_at_level to reward I/O-bound behavior
+// MLFQ: This is called from usertrap() on timer interrupts.
+// Tick counting is done in usertrap() before calling yield().
+// Demotion decision is made in scheduler() after the process returns.
 void
 yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
-  // TODO [MLFQ Week 2]: Update p->ticks_at_level and p->total_ticks here
   sched();
   release(&p->lock);
 }
@@ -592,9 +614,8 @@ forkret(void)
 
 // Sleep on channel chan, releasing condition lock lk.
 // Re-acquires lk when awakened.
-// TODO [MLFQ Week 2]: Reset p->ticks_at_level here to reward I/O-bound behavior.
-//   When a process voluntarily sleeps (e.g., waiting for I/O), it demonstrates
-//   I/O-bound characteristics and should maintain its current priority level.
+// MLFQ: Reset ticks_at_level to reward I/O-bound behavior.
+// When a process voluntarily sleeps, it keeps its current priority level.
 void
 sleep(void *chan, struct spinlock *lk)
 {
@@ -614,8 +635,9 @@ sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
 
-  // TODO [MLFQ Week 2]: Reset ticks_at_level for I/O-bound behavior
-  // p->ticks_at_level = 0;
+  // MLFQ: Reset ticks at level - process gave up CPU voluntarily (I/O-bound)
+  // This prevents demotion for I/O-bound processes
+  p->ticks_at_level = 0;
 
   sched();
 

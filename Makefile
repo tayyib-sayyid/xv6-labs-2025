@@ -196,6 +196,9 @@ UPROGS=\
 	$U/_forphan\
 	$U/_dorphan\
 	$U/_procinfo\
+	$U/_cpuheavy\
+	$U/_iosim\
+	$U/_mlfqtest\
 
 
 

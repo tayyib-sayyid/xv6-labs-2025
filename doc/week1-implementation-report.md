@@ -1,11 +1,5 @@
 # Week 1 Implementation Report: MLFQ Scheduler Setup
 
-**Project:** Multi-Level Feedback Queue (MLFQ) Scheduler for xv6-RISC-V  
-**Date:** Week 1  
-**Branch:** `project`
-
----
-
 ## Overview
 
 This document summarizes all code changes made during Week 1 to set up the foundation for the MLFQ scheduler, including:

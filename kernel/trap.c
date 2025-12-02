@@ -81,8 +81,12 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    // MLFQ: Track timer ticks for quantum enforcement
+    p->ticks_at_level++;
+    p->total_ticks++;
     yield();
+  }
 
   prepare_return();
 

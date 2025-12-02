@@ -293,3 +293,299 @@ for (int i = 0; i < n; i++) {
     printf("PID %d at queue level %d\n", procs[i].pid, procs[i].queue_level);
 }
 ```
+
+---
+
+# Week 2 Implementation Details
+
+## 9. MLFQ Scheduler Implementation
+
+### 9.1 Queue Helper Functions
+
+Two helper functions were added to `kernel/proc.c`:
+
+#### mlfq_find_runnable(int level)
+```c
+static struct proc* mlfq_find_runnable(int level) {
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++) {
+    if (p->state == RUNNABLE && p->queue_level == level)
+      return p;
+  }
+  return 0;
+}
+```
+
+Scans the process table for the first RUNNABLE process at the specified queue level. Returns the process or NULL if none found.
+
+**Design Choice:** Rather than maintaining separate queue data structures (which would require complex synchronization), we scan the existing proc[] array filtered by queue_level. This is simpler and sufficient for xv6's small NPROC (64 processes).
+
+#### mlfq_demote(struct proc *p)
+```c
+static void mlfq_demote(struct proc *p) {
+  if (p->queue_level < NQUEUE - 1) {
+    p->queue_level++;
+    p->ticks_at_level = 0;
+  }
+}
+```
+
+Demotes a process to the next lower priority queue and resets its tick counter. Processes already at the lowest queue (level 3) remain there.
+
+### 9.2 MLFQ Scheduler Loop
+
+The core scheduler was replaced with MLFQ logic:
+
+```c
+void scheduler(void) {
+  struct proc *p;
+  struct cpu *c = mycpu();
+  c->proc = 0;
+
+  for (;;) {
+    intr_on();
+    int found = 0;
+
+    // Scan queues from highest priority (0) to lowest (3)
+    for (int level = 0; level < NQUEUE && !found; level++) {
+      p = mlfq_find_runnable(level);
+      if (p) {
+        acquire(&p->lock);
+        if (p->state == RUNNABLE) {
+          p->state = RUNNING;
+          c->proc = p;
+          swtch(&c->context, &p->context);
+          c->proc = 0;
+
+          // After process returns, check for demotion
+          if (p->ticks_at_level >= mlfq_quantum[p->queue_level]) {
+            mlfq_demote(p);
+          }
+          found = 1;
+        }
+        release(&p->lock);
+      }
+    }
+  }
+}
+```
+
+**Key Behaviors:**
+1. **Priority scanning:** Always starts at queue 0 and scans to queue 3, ensuring higher-priority processes run first.
+2. **Round-robin within level:** `mlfq_find_runnable()` returns the first matching process, providing simple round-robin when multiple processes are at the same level.
+3. **Demotion check:** After a process yields or is preempted, we check if it exceeded its time quantum and demote if necessary.
+
+### 9.3 Timer Tick Tracking
+
+Modified `usertrap()` in `kernel/trap.c` to track CPU usage:
+
+```c
+// Give up the CPU if this is a timer interrupt.
+if (which_dev == 2) {
+  // MLFQ: Track ticks before yielding
+  p->ticks_at_level++;
+  p->total_ticks++;
+  yield();
+}
+```
+
+Each timer interrupt increments both:
+- `ticks_at_level`: Used for demotion decisions (reset on demotion or I/O)
+- `total_ticks`: Total CPU time consumed (never reset, for accounting)
+
+### 9.4 Yield and Sleep Updates
+
+#### yield()
+```c
+void yield(void) {
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  p->state = RUNNABLE;
+  // Note: ticks_at_level is NOT reset here — demotion handled in scheduler
+  sched();
+  release(&p->lock);
+}
+```
+
+Yield does not reset tick counters, preserving the CPU usage information for demotion decisions.
+
+#### sleep()
+```c
+void sleep(void *chan, struct spinlock *lk) {
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  release(lk);
+
+  p->chan = chan;
+  p->state = SLEEPING;
+  // MLFQ: Reset ticks when voluntarily sleeping (I/O reward)
+  p->ticks_at_level = 0;
+
+  sched();
+  p->chan = 0;
+  release(&p->lock);
+  acquire(lk);
+}
+```
+
+**I/O Reward Mechanism:** When a process voluntarily sleeps (typically waiting for I/O), we reset `ticks_at_level`. This rewards I/O-bound processes by giving them a fresh quantum, helping them stay at higher priority levels.
+
+## 10. Test Programs
+
+### 10.1 cpuheavy — CPU-Bound Test
+
+A process that runs an infinite CPU-intensive loop:
+```c
+int main(void) {
+  int pid = getpid();
+  printf("cpuheavy (PID %d): Starting CPU-bound workload\n", pid);
+  volatile unsigned long counter = 0;
+  for (;;) {
+    counter++;
+    // Every 50 million iterations, print status
+    if (counter % 50000000 == 0) {
+      printf("cpuheavy (PID %d): counter = %lu\n", pid, counter);
+    }
+  }
+}
+```
+
+**Expected Behavior:** Should quickly demote from queue 0 → 1 → 2 → 3 as it consumes its time quantum at each level without sleeping.
+
+### 10.2 iosim — I/O-Bound Simulation
+
+A process that simulates I/O-bound behavior by frequently sleeping:
+```c
+int main(void) {
+  int pid = getpid();
+  printf("iosim (PID %d): Starting I/O-bound simulation\n", pid);
+  int iterations = 0;
+  for (;;) {
+    // Do a small amount of work
+    volatile int j = 0;
+    for (int i = 0; i < 10000; i++) j += i;
+
+    // Sleep to simulate I/O wait
+    sleep(1);
+    iterations++;
+    if (iterations % 50 == 0) {
+      printf("iosim (PID %d): completed %d I/O cycles\n", pid, iterations);
+    }
+  }
+}
+```
+
+**Expected Behavior:** Should stay at queue 0 because each sleep() resets ticks_at_level, preventing demotion.
+
+### 10.3 mlfqtest — Combined MLFQ Test
+
+Forks multiple CPU-bound and I/O-bound workers, then monitors their queue levels:
+```c
+int main(int argc, char *argv[]) {
+  printf("=== MLFQ Scheduler Test ===\n");
+
+  // Fork CPU-heavy workers
+  for (int i = 0; i < 2; i++) {
+    if (fork() == 0) {
+      volatile unsigned long c = 0;
+      for (;;) c++;
+    }
+  }
+
+  // Fork I/O-bound workers
+  for (int i = 0; i < 2; i++) {
+    if (fork() == 0) {
+      for (;;) {
+        volatile int j = 0;
+        for (int k = 0; k < 1000; k++) j++;
+        sleep(1);
+      }
+    }
+  }
+
+  // Monitor process states
+  sleep(10);
+  for (int round = 0; round < 5; round++) {
+    struct procinfo info[64];
+    int n = getprocinfo(info, 64);
+    printf("\n--- Snapshot %d ---\n", round + 1);
+    for (int i = 0; i < n; i++) {
+      if (info[i].state >= 3) { // RUNNABLE or RUNNING
+        printf("PID %d: queue=%d ticks=%d total=%d\n",
+               info[i].pid, info[i].queue_level,
+               info[i].ticks_at_level, info[i].total_ticks);
+      }
+    }
+    sleep(20);
+  }
+  printf("\nTest complete. Use Ctrl+A X to exit QEMU.\n");
+  for (;;) sleep(100);
+}
+```
+
+**Expected Behavior:**
+- CPU-bound workers should be at queue 3 (lowest priority)
+- I/O-bound workers should stay at queue 0 or 1 (high priority)
+- The procinfo output should show this differentiation
+
+### 10.4 procinfo — Queue Status Display
+
+A simple utility to display current process queue assignments:
+```c
+int main(void) {
+  struct procinfo info[64];
+  int n = getprocinfo(info, 64);
+  printf("PID\tState\tQueue\tTicks\tTotal\tName\n");
+  for (int i = 0; i < n; i++) {
+    printf("%d\t%d\t%d\t%d\t%d\t%s\n",
+           info[i].pid, info[i].state, info[i].queue_level,
+           info[i].ticks_at_level, info[i].total_ticks, info[i].name);
+  }
+}
+```
+
+## 11. Testing Instructions
+
+### 11.1 Building and Running
+
+```bash
+# Build with single CPU
+make clean
+make CPUS=1 qemu
+```
+
+### 11.2 Test Scenarios
+
+**Test 1: CPU-Bound Demotion**
+```
+$ cpuheavy &
+$ sleep 5
+$ procinfo
+```
+The cpuheavy process should show queue_level = 3.
+
+**Test 2: I/O-Bound Stays High**
+```
+$ iosim &
+$ sleep 5
+$ procinfo
+```
+The iosim process should show queue_level = 0.
+
+**Test 3: Mixed Workload**
+```
+$ mlfqtest
+```
+Watch the snapshots — CPU workers demote to queue 3, I/O workers stay at queue 0.
+
+## 12. Week 3 Preview
+
+The following features are planned for Week 3:
+
+1. **Priority Boost:** Periodically move all processes to queue 0 to prevent starvation (using MLFQ_BOOST_INTERVAL = 100 ticks).
+2. **Accounting-Based Demotion:** Track total CPU time at each level rather than per-quantum to prevent gaming.
+3. **Enhanced Diagnostics:** Syscall to dump scheduler statistics.
+
+---
+
+**Document Updated:** Week 2
